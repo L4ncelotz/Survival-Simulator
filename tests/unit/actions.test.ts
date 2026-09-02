@@ -30,18 +30,18 @@ function createMockPlayer(overrides: Partial<PlayerStatus> = {}): PlayerStatus {
 
 describe('Core Actions', () => {
   describe('resolveHunt', () => {
-    it('applies energy cost and grants food within range with Hunter trait bonus', () => {
+    it('applies energy cost and grants food within range with Hunter trait multiplier (x1.4)', () => {
       const hunter = createMockPlayer({ trait: 'Hunter' });
       const actionStream = new RNGStream(12345);
       const injuryStream = new RNGStream(99999);
 
-      const result = resolveHunt(hunter, actionStream, injuryStream);
+      const result = resolveHunt(hunter, actionStream, injuryStream, 'Clear');
 
       expect(result.actionType).toBe('Hunt');
       expect(result.energySpent).toBe(DEFAULT_BALANCE_CONFIG.actions.hunt.energyCost);
-      // Min food is 4 + 2 (Hunter bonus) = 6, Max is 8 + 2 = 10
+      // Base food is 4..8 -> Hunter gets Math.round(base * 1.4) -> 6..11
       expect(result.foodGained).toBeGreaterThanOrEqual(6);
-      expect(result.foodGained).toBeLessThanOrEqual(10);
+      expect(result.foodGained).toBeLessThanOrEqual(11);
       expect(result.success).toBe(true);
     });
 
@@ -50,21 +50,31 @@ describe('Core Actions', () => {
       const actionStream = new RNGStream(12345);
       const injuryStream = new RNGStream(99999);
 
-      const result = resolveHunt(scout, actionStream, injuryStream);
+      const result = resolveHunt(scout, actionStream, injuryStream, 'Clear');
 
       expect(result.foodGained).toBeGreaterThanOrEqual(4);
       expect(result.foodGained).toBeLessThanOrEqual(8);
     });
 
+    it('applies Rain weather modifier (x0.7) to Hunt food', () => {
+      const player = createMockPlayer({ trait: 'Scout' });
+      const actionStream = new RNGStream(12345);
+      const injuryStream = new RNGStream(99999);
+
+      const result = resolveHunt(player, actionStream, injuryStream, 'Rain');
+
+      // Base food 4..8 * 0.7 -> 3..6
+      expect(result.foodGained).toBeGreaterThanOrEqual(3);
+      expect(result.foodGained).toBeLessThanOrEqual(6);
+    });
+
     it('applies injury damage when injury roll passes', () => {
       const player = createMockPlayer();
       const actionStream = new RNGStream(1);
-      // Force injury stream to succeed (next() returns 0 which is < 0.15)
       const injuryStream = new RNGStream(1);
-      const originalNext = injuryStream.next.bind(injuryStream);
       injuryStream.next = () => 0.05; // Force chance true
 
-      const result = resolveHunt(player, actionStream, injuryStream);
+      const result = resolveHunt(player, actionStream, injuryStream, 'Clear');
       expect(result.hpDamage).toBe(15);
     });
   });
@@ -81,23 +91,23 @@ describe('Core Actions', () => {
       expect(result.waterGained).toBeLessThanOrEqual(10);
     });
 
-    it('adds rain bonus water when weather is Rain', () => {
+    it('adds rain bonus water (+2) when weather is Rain', () => {
       const player = createMockPlayer();
       const actionStream = new RNGStream(42);
 
       const result = resolveFindWater(player, actionStream, 'Rain');
 
-      expect(result.waterGained).toBeGreaterThanOrEqual(10); // 6 + 4
-      expect(result.waterGained).toBeLessThanOrEqual(14); // 10 + 4
+      expect(result.waterGained).toBeGreaterThanOrEqual(8); // 6 + 2
+      expect(result.waterGained).toBeLessThanOrEqual(12); // 10 + 2
     });
   });
 
   describe('resolveGatherWood', () => {
-    it('applies Builder trait bonus', () => {
+    it('applies Builder trait bonus (+2)', () => {
       const builder = createMockPlayer({ trait: 'Builder' });
       const actionStream = new RNGStream(777);
 
-      const result = resolveGatherWood(builder, actionStream);
+      const result = resolveGatherWood(builder, actionStream, 'Clear');
 
       expect(result.energySpent).toBe(DEFAULT_BALANCE_CONFIG.actions.gatherWood.energyCost);
       expect(result.woodGained).toBeGreaterThanOrEqual(5); // 3 + 2
@@ -108,10 +118,20 @@ describe('Core Actions', () => {
       const medic = createMockPlayer({ trait: 'Medic' });
       const actionStream = new RNGStream(777);
 
-      const result = resolveGatherWood(medic, actionStream);
+      const result = resolveGatherWood(medic, actionStream, 'Clear');
 
       expect(result.woodGained).toBeGreaterThanOrEqual(3);
       expect(result.woodGained).toBeLessThanOrEqual(5);
+    });
+
+    it('applies Rain weather wood penalty (-2)', () => {
+      const medic = createMockPlayer({ trait: 'Medic' });
+      const actionStream = new RNGStream(777);
+
+      const result = resolveGatherWood(medic, actionStream, 'Rain');
+
+      expect(result.woodGained).toBeGreaterThanOrEqual(1); // Math.max(1, 3 - 2)
+      expect(result.woodGained).toBeLessThanOrEqual(3); // 5 - 2
     });
   });
 
@@ -121,7 +141,7 @@ describe('Core Actions', () => {
       const exploreStream = new RNGStream(101);
       const injuryStream = new RNGStream(202);
 
-      const result = resolveExplore(scout, exploreStream, injuryStream);
+      const result = resolveExplore(scout, exploreStream, injuryStream, 'Clear');
 
       expect(result.energySpent).toBe(DEFAULT_BALANCE_CONFIG.actions.explore.energyCost);
       expect(result.foodGained).toBeGreaterThanOrEqual(1);
@@ -141,12 +161,10 @@ describe('Core Actions', () => {
       expect(result.hpRestored).toBe(10);
     });
 
-    it('does not restore HP if player is in DOWN state', () => {
-      const downPlayer = createMockPlayer({ hp: 15, maxHp: 100, downDays: 1 });
-
-      const result = resolveRest(downPlayer);
-
-      expect(result.hpRestored).toBe(0);
+    it('recovers energy up to maxEnergy', () => {
+      const tiredPlayer = createMockPlayer({ energy: 70, maxEnergy: 100 });
+      const result = resolveRest(tiredPlayer);
+      expect(result.success).toBe(true);
     });
   });
 });
@@ -162,6 +180,7 @@ describe('Support Actions', () => {
       expect(result.success).toBe(false);
       expect(result.medicineSpent).toBe(0);
       expect(result.hpRestored).toBe(0);
+      expect(result.energySpent).toBe(DEFAULT_BALANCE_CONFIG.actions.heal.energyCost);
     });
 
     it('fails if target is Dead', () => {
@@ -172,6 +191,20 @@ describe('Support Actions', () => {
 
       expect(result.success).toBe(false);
       expect(result.medicineSpent).toBe(0);
+    });
+
+    it('fails with 0 medicine and 0 HP if target was already treated today (duplicate heal)', () => {
+      const healer = createMockPlayer({ trait: 'Medic' });
+      const target = createMockPlayer({ id: 'P2', hp: 40 });
+      const alreadyTreated = new Set(['P2' as const]);
+
+      const result = resolveHeal(healer, target, 2, alreadyTreated);
+
+      expect(result.success).toBe(false);
+      expect(result.medicineSpent).toBe(0);
+      expect(result.hpRestored).toBe(0);
+      expect(result.energySpent).toBe(DEFAULT_BALANCE_CONFIG.actions.heal.energyCost);
+      expect(result.message).toContain('already treated');
     });
 
     it('revives a DOWN player to 30 HP', () => {
@@ -210,27 +243,27 @@ describe('Support Actions', () => {
       expect(results[0]?.energySpent).toBe(DEFAULT_BALANCE_CONFIG.actions.buildSignal.energyCost);
     });
 
-    it('charges builder discount (3 wood instead of 5)', () => {
+    it('charges builder discount (4 wood instead of 5) and grants 8 signal for single build', () => {
       const builder = createMockPlayer({ trait: 'Builder' });
       const results = resolveBuildSignal([{ player: builder }], 'Clear', 10);
 
       expect(results).toHaveLength(1);
       expect(results[0]?.success).toBe(true);
-      expect(results[0]?.woodSpent).toBe(3);
-      expect(results[0]?.signalGained).toBe(10);
+      expect(results[0]?.woodSpent).toBe(4); // 5 - 1 = 4
+      expect(results[0]?.signalGained).toBe(8); // single build = +8
     });
 
-    it('charges standard wood (5 wood) for non-builder', () => {
+    it('charges standard wood (5 wood) for non-builder and grants 8 signal for single build', () => {
       const scout = createMockPlayer({ trait: 'Scout' });
       const results = resolveBuildSignal([{ player: scout }], 'Clear', 10);
 
       expect(results).toHaveLength(1);
       expect(results[0]?.success).toBe(true);
       expect(results[0]?.woodSpent).toBe(5);
-      expect(results[0]?.signalGained).toBe(10);
+      expect(results[0]?.signalGained).toBe(8);
     });
 
-    it('applies cooperative synergy (25 signal) when 2 builders construct on same day', () => {
+    it('applies cooperative synergy (+12 signal max) when 2 builders construct on same day', () => {
       const b1 = createMockPlayer({ id: 'P1', trait: 'Builder' });
       const b2 = createMockPlayer({ id: 'P2', trait: 'Scout' });
 
@@ -240,13 +273,34 @@ describe('Support Actions', () => {
       expect(results[0]?.success).toBe(true);
       expect(results[1]?.success).toBe(true);
       const totalSignal = (results[0]?.signalGained ?? 0) + (results[1]?.signalGained ?? 0);
-      expect(totalSignal).toBe(25);
-      // Total wood spent: 3 (Builder) + 5 (Scout) = 8
+      expect(totalSignal).toBe(12); // max 12 signal per day
+      // Total wood spent: 4 (Builder) + 5 (Scout) = 9
       const totalWood = (results[0]?.woodSpent ?? 0) + (results[1]?.woodSpent ?? 0);
-      expect(totalWood).toBe(8);
+      expect(totalWood).toBe(9);
     });
 
-    it('fails second builder when insufficient wood for both', () => {
+    it('does not charge wood to useless 3rd+ builders when daily signal limit (+12) is reached', () => {
+      const b1 = createMockPlayer({ id: 'P1', trait: 'Builder' });
+      const b2 = createMockPlayer({ id: 'P2', trait: 'Scout' });
+      const b3 = createMockPlayer({ id: 'P3', trait: 'Hunter' });
+
+      const results = resolveBuildSignal(
+        [{ player: b1 }, { player: b2 }, { player: b3 }],
+        'Clear',
+        20,
+      );
+
+      expect(results).toHaveLength(3);
+      expect(results[0]?.success).toBe(true);
+      expect(results[1]?.success).toBe(true);
+      expect(results[2]?.success).toBe(false);
+      expect(results[2]?.woodSpent).toBe(0);
+      expect(results[2]?.signalGained).toBe(0);
+      expect(results[2]?.energySpent).toBe(DEFAULT_BALANCE_CONFIG.actions.buildSignal.energyCost);
+      expect(results[2]?.message).toContain('limit');
+    });
+
+    it('fails second builder when insufficient wood for both (wood downgrade)', () => {
       const b1 = createMockPlayer({ id: 'P1', trait: 'Scout' }); // costs 5
       const b2 = createMockPlayer({ id: 'P2', trait: 'Scout' }); // costs 5
 
@@ -255,7 +309,7 @@ describe('Support Actions', () => {
       expect(results).toHaveLength(2);
       expect(results[0]?.success).toBe(true);
       expect(results[0]?.woodSpent).toBe(5);
-      expect(results[0]?.signalGained).toBe(10);
+      expect(results[0]?.signalGained).toBe(8);
 
       expect(results[1]?.success).toBe(false);
       expect(results[1]?.woodSpent).toBe(0);

@@ -1,18 +1,42 @@
 import { DEFAULT_BALANCE_CONFIG, type BalanceConfig } from '../config/balance.js';
 import { getCondition } from '../rules/condition.js';
-import type { PlayerStatus, WeatherType } from '../types.js';
+import type { PlayerId, PlayerStatus, WeatherType } from '../types.js';
 import type { ActionResult } from './types.js';
 
 /**
  * Resolves a single Heal action targeting another player (or self).
+ * Guarantees that only the first valid Heal on a target resolves; duplicate Heals on the same
+ * target consume action energy but 0 additional medicine and 0 HP.
  */
 export function resolveHeal(
   healer: PlayerStatus,
   target: PlayerStatus,
   availableMedicine: number,
+  alreadyTreatedTargetIds: ReadonlySet<PlayerId> = new Set(),
   config: BalanceConfig = DEFAULT_BALANCE_CONFIG,
 ): ActionResult {
   const targetCondition = getCondition(target, config);
+
+  // Check collision: Target already treated by an earlier heal today
+  if (alreadyTreatedTargetIds.has(target.id)) {
+    return {
+      playerId: healer.id,
+      actionType: 'Heal',
+      success: false,
+      energySpent: config.actions.heal.energyCost,
+      foodGained: 0,
+      waterGained: 0,
+      woodGained: 0,
+      medicineGained: 0,
+      woodSpent: 0,
+      medicineSpent: 0,
+      hpRestored: 0,
+      hpDamage: 0,
+      signalGained: 0,
+      targetPlayerId: target.id,
+      message: `${healer.name} attempted to heal ${target.name}, but ${target.name} was already treated by another survivor today.`,
+    };
+  }
 
   // Validation: Target must not be dead and medicine must be available
   if (targetCondition === 'Dead' || availableMedicine < config.actions.heal.medicineCost) {
@@ -44,7 +68,7 @@ export function resolveHeal(
   const medicineSpent = config.actions.heal.medicineCost;
 
   if (targetCondition === 'DOWN') {
-    // Revive DOWN player to designated downRecoveryHp (e.g., 30 HP)
+    // Revive DOWN player to designated downRecoveryHp (30 HP)
     const hpRestored = Math.max(0, config.actions.heal.downRecoveryHp - target.hp);
 
     return {
@@ -98,6 +122,12 @@ export interface BuildSignalParticipant {
 
 /**
  * Resolves all Build Signal actions submitted on the same day with multi-builder collision & synergy handling.
+ * - Single build = +8 signal.
+ * - 2+ builders = +12 MAX signal / day (1st gets 8, 2nd gets 4).
+ * - Builder discount: wood cost 4 instead of 5.
+ * - Downgrades when wood is only sufficient for 1 builder.
+ * - Useless extra builders (> 2) do not spend wood.
+ * - Storm disables build.
  */
 export function resolveBuildSignal(
   participants: readonly BuildSignalParticipant[],
@@ -134,6 +164,27 @@ export function resolveBuildSignal(
   const failedResults: ActionResult[] = [];
 
   for (const { player } of participants) {
+    // If we already have 2 qualified builders, daily construction limit is reached
+    if (qualifiedBuilders.length >= 2) {
+      failedResults.push({
+        playerId: player.id,
+        actionType: 'BuildSignal',
+        success: false,
+        energySpent: config.actions.buildSignal.energyCost,
+        foodGained: 0,
+        waterGained: 0,
+        woodGained: 0,
+        medicineGained: 0,
+        woodSpent: 0,
+        medicineSpent: 0,
+        hpRestored: 0,
+        hpDamage: 0,
+        signalGained: 0,
+        message: `${player.name} attempted to build the rescue signal, but the daily construction limit (+12 max/day) was already reached. Wood was saved.`,
+      });
+      continue;
+    }
+
     const woodCost =
       player.trait === 'Builder'
         ? config.actions.buildSignal.builderWoodCost
@@ -168,16 +219,16 @@ export function resolveBuildSignal(
     let synergyNote = '';
 
     if (successCount === 2) {
-      // 2 builders synergy: Total 25 signal (15 for first, 10 for second)
-      signalGained = index === 0 ? 15 : 10;
-      synergyNote = ` (Cooperative Synergy! +25 total)`;
-    } else if (successCount > 2) {
-      // 3+ builders: First two get 15 & 10 (25), additional get 10 each
-      signalGained = index === 0 ? 15 : 10;
-      synergyNote = index < 2 ? ` (Cooperative Synergy!)` : '';
+      // 2 builders synergy: Total 12 signal (8 for first, 4 for second)
+      signalGained =
+        index === 0
+          ? config.actions.buildSignal.singleSignalGain
+          : config.actions.buildSignal.maxDailySignalGain -
+            config.actions.buildSignal.singleSignalGain;
+      synergyNote = ` (Cooperative Synergy! +${config.actions.buildSignal.maxDailySignalGain} total)`;
     } else {
-      // 1 builder: standard 10 signal
-      signalGained = config.actions.buildSignal.signalGain;
+      // 1 builder: standard 8 signal
+      signalGained = config.actions.buildSignal.singleSignalGain;
     }
 
     return {

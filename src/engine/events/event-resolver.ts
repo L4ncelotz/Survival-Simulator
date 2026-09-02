@@ -1,3 +1,4 @@
+import { DEFAULT_BALANCE_CONFIG, type BalanceConfig } from '../config/balance.js';
 import { getCondition } from '../rules/condition.js';
 import type { RNGStream } from '../rng/rng-stream.js';
 import type { GameState, PlayerId, PlayerStatus, ResourcePool } from '../types.js';
@@ -15,12 +16,6 @@ const NORMAL_WEIGHTS: CategoryWeights = {
   negative: 30,
 };
 
-const PITY_WEIGHTS: CategoryWeights = {
-  positive: 65,
-  neutral: 25,
-  negative: 10,
-};
-
 const POSITIVE_EVENT_IDS = [
   'SupplyCrate',
   'ClearSkies',
@@ -33,20 +28,24 @@ const NEUTRAL_EVENT_IDS = ['PeacefulDay', 'PassingFlock'] as const;
 const NEGATIVE_EVENT_IDS = [
   'FoodSpoilage',
   'WaterContamination',
-  'ColdSnap',
+  'CampInfestation',
+  'SevereCold',
   'PredatorProwl',
+  'SignalDamage',
 ] as const;
 
 const ALL_PLAYER_IDS: readonly PlayerId[] = ['P1', 'P2', 'P3', 'P4'] as const;
 
 /**
- * Resolves a daily event using the event RNG stream and current crisis state.
+ * Resolves a daily event using the event RNG stream.
+ * Crisis state is telemetry only and does NOT alter event probabilities.
  */
-export function resolveDailyEvent(state: GameState, eventStream: RNGStream): EventResult {
-  const isCrisisActive =
-    state.crisis.foodCrisis || state.crisis.waterCrisis || state.crisis.hpCrisis;
-
-  const weights = isCrisisActive ? PITY_WEIGHTS : NORMAL_WEIGHTS;
+export function resolveDailyEvent(
+  state: GameState,
+  eventStream: RNGStream,
+  config: BalanceConfig = DEFAULT_BALANCE_CONFIG,
+): EventResult {
+  const weights = NORMAL_WEIGHTS;
   const totalWeight = weights.positive + weights.neutral + weights.negative;
   const roll = eventStream.next() * totalWeight;
 
@@ -60,7 +59,7 @@ export function resolveDailyEvent(state: GameState, eventStream: RNGStream): Eve
   }
 
   const livingPlayerIds = ALL_PLAYER_IDS.filter(
-    (id) => getCondition(state.players[id]) !== 'Dead',
+    (id) => getCondition(state.players[id], config) !== 'Dead',
   );
 
   switch (category) {
@@ -123,33 +122,22 @@ export function resolveDailyEvent(state: GameState, eventStream: RNGStream): Eve
           return {
             eventId,
             name: 'Peaceful Day',
-            description: 'The island remains calm and uneventful.',
+            description: 'The island remains calm and quiet. No notable events occurred today.',
             category: 'neutral',
             resourceDelta: {},
             hpDelta: {},
             energyDelta: {},
           };
-        case 'PassingFlock': {
-          const energyDelta: Partial<Record<PlayerId, number>> = {};
-          // Give bonus energy to living Scout, or all living players if no Scout
-          const scoutId = livingPlayerIds.find((id) => state.players[id].trait === 'Scout');
-          if (scoutId) {
-            energyDelta[scoutId] = 10;
-          } else {
-            for (const id of livingPlayerIds) {
-              energyDelta[id] = 5;
-            }
-          }
+        case 'PassingFlock':
           return {
             eventId,
             name: 'Passing Flock',
-            description: 'A flock of birds provided valuable navigation insights (+Energy).',
+            description: 'A flock of sea birds flew overhead heading toward the open ocean.',
             category: 'neutral',
             resourceDelta: {},
             hpDelta: {},
-            energyDelta,
+            energyDelta: {},
           };
-        }
       }
       break;
     }
@@ -161,7 +149,7 @@ export function resolveDailyEvent(state: GameState, eventStream: RNGStream): Eve
           return {
             eventId,
             name: 'Food Spoilage',
-            description: 'Tropical heat spoiled some food stores (-3 Food).',
+            description: 'Humid air and vermin spoiled some preserved food (-3 Food).',
             category: 'negative',
             resourceDelta: { food: -3 },
             hpDelta: {},
@@ -171,43 +159,68 @@ export function resolveDailyEvent(state: GameState, eventStream: RNGStream): Eve
           return {
             eventId,
             name: 'Water Contamination',
-            description: 'Sediment fouled part of the water reserve (-3 Water).',
+            description: 'Debris fouled the fresh water cache (-3 Water).',
             category: 'negative',
             resourceDelta: { water: -3 },
             hpDelta: {},
             energyDelta: {},
           };
-        case 'ColdSnap': {
+        case 'CampInfestation': {
           const energyDelta: Partial<Record<PlayerId, number>> = {};
           for (const id of livingPlayerIds) {
-            energyDelta[id] = -15;
+            energyDelta[id] = -10;
           }
           return {
             eventId,
-            name: 'Cold Snap',
-            description: 'A bitter nocturnal chill drained the survivors (-15 Energy).',
+            name: 'Camp Infestation',
+            description: 'Biting insects disturbed sleep, causing exhaustion (-10 Energy to all).',
             category: 'negative',
             resourceDelta: {},
             hpDelta: {},
             energyDelta,
           };
         }
-        case 'PredatorProwl': {
+        case 'SevereCold': {
           const hpDelta: Partial<Record<PlayerId, number>> = {};
-          if (livingPlayerIds.length > 0) {
-            const targetId = eventStream.pick(livingPlayerIds);
-            hpDelta[targetId] = -15;
+          for (const id of livingPlayerIds) {
+            hpDelta[id] = -10;
           }
           return {
             eventId,
-            name: 'Predator Prowl',
-            description: 'A stalking predator struck a survivor (-15 HP).',
+            name: 'Severe Cold',
+            description: 'A sudden chilling drop in temperature harmed all survivors (-10 HP).',
             category: 'negative',
             resourceDelta: {},
             hpDelta,
             energyDelta: {},
           };
         }
+        case 'PredatorProwl': {
+          const hpDelta: Partial<Record<PlayerId, number>> = {};
+          if (livingPlayerIds.length > 0) {
+            const victimId = eventStream.pick(livingPlayerIds);
+            hpDelta[victimId] = -15;
+          }
+          return {
+            eventId,
+            name: 'Predator Prowl',
+            description: 'A nocturnal predator attacked a survivor (-15 HP).',
+            category: 'negative',
+            resourceDelta: {},
+            hpDelta,
+            energyDelta: {},
+          };
+        }
+        case 'SignalDamage':
+          return {
+            eventId,
+            name: 'Signal Damage',
+            description: 'Strong coastal gusts damaged part of the signal structure (-2 Wood).',
+            category: 'negative',
+            resourceDelta: { wood: -2 },
+            hpDelta: {},
+            energyDelta: {},
+          };
       }
       break;
     }
@@ -216,24 +229,29 @@ export function resolveDailyEvent(state: GameState, eventStream: RNGStream): Eve
 
 /**
  * Purely applies an EventResult to the player status list and resource pool.
+ * Clamps resources at 0 and caps medicine at maxMedicine.
  */
 export function applyEventResult(
   players: Record<PlayerId, PlayerStatus>,
   resources: ResourcePool,
   eventResult: EventResult,
+  config: BalanceConfig = DEFAULT_BALANCE_CONFIG,
 ): { updatedPlayers: Record<PlayerId, PlayerStatus>; updatedResources: ResourcePool } {
   const updatedResources: ResourcePool = {
     food: Math.max(0, resources.food + (eventResult.resourceDelta.food ?? 0)),
     water: Math.max(0, resources.water + (eventResult.resourceDelta.water ?? 0)),
     wood: Math.max(0, resources.wood + (eventResult.resourceDelta.wood ?? 0)),
-    medicine: Math.max(0, resources.medicine + (eventResult.resourceDelta.medicine ?? 0)),
+    medicine: Math.max(
+      0,
+      Math.min(config.maxMedicine, resources.medicine + (eventResult.resourceDelta.medicine ?? 0)),
+    ),
   };
 
   const updatedPlayers: Record<PlayerId, PlayerStatus> = { ...players };
 
   for (const id of ALL_PLAYER_IDS) {
     const player = players[id];
-    if (getCondition(player) === 'Dead') {
+    if (getCondition(player, config) === 'Dead') {
       continue;
     }
 

@@ -1,6 +1,5 @@
 import { DEFAULT_BALANCE_CONFIG, type BalanceConfig } from '../config/balance.js';
 import type { RNGStream } from '../rng/rng-stream.js';
-import { getCondition } from '../rules/condition.js';
 import type { PlayerStatus, WeatherType } from '../types.js';
 import type { ActionResult } from './types.js';
 
@@ -11,6 +10,8 @@ export function resolveHunt(
   player: PlayerStatus,
   actionStream: RNGStream,
   injuryStream: RNGStream,
+  weather: WeatherType = 'Clear',
+  hasMedic: boolean = false,
   config: BalanceConfig = DEFAULT_BALANCE_CONFIG,
 ): ActionResult {
   const energySpent = config.actions.hunt.energyCost;
@@ -18,15 +19,26 @@ export function resolveHunt(
     config.actions.hunt.minFood,
     config.actions.hunt.maxFood,
   );
-  const traitBonus = player.trait === 'Hunter' ? config.actions.hunt.hunterFoodBonus : 0;
-  const foodGained = baseFood + traitBonus;
 
-  const injured = injuryStream.chance(config.actions.hunt.injuryChance);
+  const hunterMultiplier =
+    player.trait === 'Hunter' ? config.actions.hunt.hunterMultiplier : 1.0;
+  const rainMultiplier =
+    weather === 'Rain' ? config.actions.hunt.rainMultiplier : 1.0;
+  const foodGained = Math.round(baseFood * hunterMultiplier * rainMultiplier);
+
+  const medicReduction = hasMedic ? config.medicTeamInjuryReduction : 1.0;
+  const injuryChance = config.actions.hunt.injuryChance * medicReduction;
+  const injured = injuryStream.chance(injuryChance);
   const hpDamage = injured ? 15 : 0;
 
-  const message = `${player.name} (${player.trait}) hunted and secured ${foodGained} food${
-    traitBonus > 0 ? ` (+${traitBonus} Hunter bonus)` : ''
-  }${injured ? ' but suffered an injury (-15 HP)' : ''}.`;
+  const notes: string[] = [];
+  if (hunterMultiplier > 1.0) notes.push(`Hunter ×${hunterMultiplier}`);
+  if (rainMultiplier < 1.0) notes.push(`Rain ×${rainMultiplier}`);
+  const modifierStr = notes.length > 0 ? ` (${notes.join(', ')})` : '';
+
+  const message = `${player.name} (${player.trait}) hunted and secured ${foodGained} food${modifierStr}${
+    injured ? ' but suffered an injury (-15 HP)' : ''
+  }.`;
 
   return {
     playerId: player.id,
@@ -91,6 +103,7 @@ export function resolveFindWater(
 export function resolveGatherWood(
   player: PlayerStatus,
   actionStream: RNGStream,
+  weather: WeatherType = 'Clear',
   config: BalanceConfig = DEFAULT_BALANCE_CONFIG,
 ): ActionResult {
   const energySpent = config.actions.gatherWood.energyCost;
@@ -99,11 +112,15 @@ export function resolveGatherWood(
     config.actions.gatherWood.maxWood,
   );
   const traitBonus = player.trait === 'Builder' ? config.actions.gatherWood.builderBonusWood : 0;
-  const woodGained = baseWood + traitBonus;
+  const rainPenalty = weather === 'Rain' ? config.actions.gatherWood.rainWoodPenalty : 0;
+  const woodGained = Math.max(1, baseWood + traitBonus - rainPenalty);
 
-  const message = `${player.name} (${player.trait}) gathered ${woodGained} wood${
-    traitBonus > 0 ? ` (+${traitBonus} Builder bonus)` : ''
-  }.`;
+  const notes: string[] = [];
+  if (traitBonus > 0) notes.push(`+${traitBonus} Builder bonus`);
+  if (rainPenalty > 0) notes.push(`-${rainPenalty} Rain penalty`);
+  const notesStr = notes.length > 0 ? ` (${notes.join(', ')})` : '';
+
+  const message = `${player.name} (${player.trait}) gathered ${woodGained} wood${notesStr}.`;
 
   return {
     playerId: player.id,
@@ -130,20 +147,32 @@ export function resolveExplore(
   player: PlayerStatus,
   exploreStream: RNGStream,
   injuryStream: RNGStream,
+  weather: WeatherType = 'Clear',
+  hasMedic: boolean = false,
   config: BalanceConfig = DEFAULT_BALANCE_CONFIG,
 ): ActionResult {
   const energySpent = config.actions.explore.energyCost;
 
-  // Medicine roll
-  const medicineGained = exploreStream.chance(config.actions.explore.medicineChance) ? 1 : 0;
+  // Medicine roll (Scout gets 1.2x chance multiplier)
+  const scoutMedMultiplier =
+    player.trait === 'Scout' ? config.actions.explore.scoutMedicineMultiplier : 1.0;
+  const medicineChance = config.actions.explore.medicineChance * scoutMedMultiplier;
+  const medicineGained = exploreStream.chance(medicineChance) ? 1 : 0;
+
   // Resource loot rolls
   const foodGained = exploreStream.nextInt(1, 2);
   const waterGained = exploreStream.nextInt(1, 2);
   const woodGained = exploreStream.nextInt(0, 1);
 
-  // Hazard roll
+  // Hazard roll (Scout 0.5x, Storm 2.0x, Medic team passive 0.85x)
+  const scoutInjuryFactor =
+    player.trait === 'Scout' ? config.actions.explore.scoutInjuryReduction : 1.0;
+  const stormFactor =
+    weather === 'Storm' ? config.actions.explore.stormInjuryMultiplier : 1.0;
+  const medicFactor = hasMedic ? config.medicTeamInjuryReduction : 1.0;
+
   const hazardChance =
-    0.2 * (player.trait === 'Scout' ? config.actions.explore.scoutInjuryReduction : 1.0);
+    config.actions.explore.hazardChance * scoutInjuryFactor * stormFactor * medicFactor;
   const injured = injuryStream.chance(hazardChance);
   const hpDamage = injured ? 10 : 0;
 
@@ -176,15 +205,12 @@ export function resolveRest(
   player: PlayerStatus,
   config: BalanceConfig = DEFAULT_BALANCE_CONFIG,
 ): ActionResult {
-  const condition = getCondition(player, config);
-  const isAbleToRestHp = condition === 'Healthy' || condition === 'Injured';
-  const hpRestored = isAbleToRestHp
-    ? Math.min(player.maxHp - player.hp, config.actions.rest.hpRecovery)
-    : 0;
+  const energyGained = config.actions.rest.energyRecovery;
+  const hpRestored = Math.min(player.maxHp - player.hp, config.actions.rest.hpRecovery);
 
-  const message = `${player.name} rested, recovering energy${
-    hpRestored > 0 ? ` and ${hpRestored} HP` : ''
-  }.`;
+  const message = `${player.name} rested at camp (+${energyGained} Energy${
+    hpRestored > 0 ? `, +${hpRestored} HP` : ''
+  }).`;
 
   return {
     playerId: player.id,

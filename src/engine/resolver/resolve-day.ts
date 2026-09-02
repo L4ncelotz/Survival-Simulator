@@ -24,7 +24,6 @@ import type {
   PlayerId,
   PlayerStatus,
   ResourcePool,
-  WeatherType,
 } from '../types.js';
 import type { DayLog, DayResolutionResult } from './types.js';
 
@@ -50,7 +49,16 @@ function getActionEnergyCost(actionType: ActionType, config: BalanceConfig): num
 }
 
 /**
- * Pure orchestrator function that executes a full daily game turn.
+ * Pure orchestrator function that executes a full daily game turn following the canonical 10-step pipeline:
+ * 1. Validate Actions (check ability to act & energy cost)
+ * 2. Resource Actions (Hunt, FindWater, GatherWood, Explore, Rest) -> update resources & player stats immediately
+ * 3. Support Actions (Heal, BuildSignal) -> utilize updated resource pool with today's gathered wood/medicine
+ * 4. Ghost Intervention (if requested & available) -> replaces action or event result
+ * 5. Daily Random Event (with standard category weights) -> applies resource/player deltas
+ * 6. Consumption & Needs Triage (highest-Hunger/Thirst triage, partial rations, needs damage, DOWN/Death timers)
+ * 7. Crisis Check (telemetry flags: foodCrisis, waterCrisis, hpCrisis)
+ * 8. Win / Lose Evaluation (Day 20 Normal Win precedence, Early Rescue, Emergency Window, All Dead, Expired)
+ * 9. Roll Next Weather & Assemble Next State
  */
 export function resolveDay(
   state: GameState,
@@ -71,11 +79,15 @@ export function resolveDay(
 
   let workingResources: ResourcePool = { ...state.resources };
   let workingPlayers: Record<PlayerId, PlayerStatus> = { ...state.players };
-  const actionResults: ActionResult[] = [];
+  const actionResultsMap = new Map<PlayerId, ActionResult>();
   const downRecoveries: PlayerId[] = [];
 
-  // Phase 1: Action Execution
-  const buildSignalParticipants: { player: PlayerStatus }[] = [];
+  const hasMedic = Object.values(workingPlayers).some(
+    (p) => p.trait === 'Medic' && getCondition(p, config) !== 'Dead',
+  );
+
+  // Step 1: Validate Actions
+  const validActionPlayerIds: PlayerId[] = [];
 
   for (const id of ALL_PLAYER_IDS) {
     const player = workingPlayers[id];
@@ -85,9 +97,8 @@ export function resolveDay(
       continue;
     }
 
-    // Check if player is able to act (Healthy / Injured)
     if (!isPlayerAbleToAct(player, config)) {
-      actionResults.push({
+      actionResultsMap.set(id, {
         playerId: id,
         actionType: action.type,
         success: false,
@@ -101,6 +112,7 @@ export function resolveDay(
         hpRestored: 0,
         hpDamage: 0,
         signalGained: 0,
+        targetPlayerId: action.targetPlayerId,
         message: `${player.name} is ${getCondition(player, config)} and cannot act.`,
       });
       continue;
@@ -108,7 +120,7 @@ export function resolveDay(
 
     const energyCost = getActionEnergyCost(action.type, config);
     if (player.energy < energyCost) {
-      actionResults.push({
+      actionResultsMap.set(id, {
         playerId: id,
         actionType: action.type,
         success: false,
@@ -122,74 +134,147 @@ export function resolveDay(
         hpRestored: 0,
         hpDamage: 0,
         signalGained: 0,
+        targetPlayerId: action.targetPlayerId,
         message: `${player.name} was exhausted (${player.energy}/${energyCost} Energy) and could not perform ${action.type}.`,
       });
       continue;
     }
 
-    // Core actions
+    validActionPlayerIds.push(id);
+  }
+
+  // Step 2: Resource Actions Execution (Hunt, FindWater, GatherWood, Explore, Rest)
+  for (const id of validActionPlayerIds) {
+    const player = workingPlayers[id];
+    const action = actions[id]!;
+
+    let result: ActionResult | undefined;
+
     switch (action.type) {
-      case 'Hunt': {
-        const result = resolveHunt(player, actionStream, injuryStream, config);
-        actionResults.push(result);
+      case 'Hunt':
+        result = resolveHunt(player, actionStream, injuryStream, state.weather, hasMedic, config);
         break;
-      }
-      case 'FindWater': {
-        const result = resolveFindWater(player, actionStream, state.weather, config);
-        actionResults.push(result);
+      case 'FindWater':
+        result = resolveFindWater(player, actionStream, state.weather, config);
         break;
-      }
-      case 'GatherWood': {
-        const result = resolveGatherWood(player, actionStream, config);
-        actionResults.push(result);
+      case 'GatherWood':
+        result = resolveGatherWood(player, actionStream, state.weather, config);
         break;
-      }
-      case 'Explore': {
-        const result = resolveExplore(player, exploreStream, injuryStream, config);
-        actionResults.push(result);
+      case 'Explore':
+        result = resolveExplore(
+          player,
+          exploreStream,
+          injuryStream,
+          state.weather,
+          hasMedic,
+          config,
+        );
         break;
-      }
-      case 'Rest': {
-        const result = resolveRest(player, config);
-        actionResults.push(result);
+      case 'Rest':
+        result = resolveRest(player, config);
         break;
-      }
-      case 'Heal': {
-        const targetId = action.targetPlayerId ?? id;
-        const target = workingPlayers[targetId];
-        const result = resolveHeal(player, target, workingResources.medicine, config);
-        actionResults.push(result);
-        if (result.success && result.medicineSpent > 0) {
-          workingResources = {
-            ...workingResources,
-            medicine: workingResources.medicine - result.medicineSpent,
-          };
-          // Apply heal to target
-          const targetWasDown = getCondition(target, config) === 'DOWN';
-          const newTargetHp = targetWasDown
-            ? config.actions.heal.downRecoveryHp
-            : Math.min(target.maxHp, target.hp + result.hpRestored);
+      default:
+        // Support actions resolved in Step 3
+        break;
+    }
 
-          workingPlayers[targetId] = {
-            ...target,
-            hp: newTargetHp,
-            downDays: targetWasDown ? 0 : target.downDays,
-          };
+    if (result) {
+      actionResultsMap.set(id, result);
 
-          if (targetWasDown) {
-            downRecoveries.push(targetId);
-          }
-        }
-        break;
+      // Immediately deposit gained resources into workingResources
+      workingResources = {
+        food: workingResources.food + result.foodGained,
+        water: workingResources.water + result.waterGained,
+        wood: workingResources.wood + result.woodGained,
+        medicine: Math.max(
+          0,
+          Math.min(config.maxMedicine, workingResources.medicine + result.medicineGained),
+        ),
+      };
+
+      // Update acting player energy and HP
+      let newEnergy = Math.max(0, player.energy - result.energySpent);
+      if (result.actionType === 'Rest') {
+        newEnergy = Math.min(player.maxEnergy, newEnergy + config.actions.rest.energyRecovery);
       }
-      case 'BuildSignal': {
-        buildSignalParticipants.push({ player });
-        break;
-      }
+      const newHp = Math.max(
+        0,
+        Math.min(player.maxHp, player.hp - result.hpDamage + result.hpRestored),
+      );
+
+      workingPlayers[id] = {
+        ...player,
+        energy: newEnergy,
+        hp: newHp,
+      };
     }
   }
 
-  // Resolve BuildSignal actions together for synergy and wood pool collision
+  // Step 3: Support Actions Execution (Heal, BuildSignal)
+  // Heal actions (sequential with collision detection)
+  const alreadyTreatedTargetIds = new Set<PlayerId>();
+
+  for (const id of validActionPlayerIds) {
+    const action = actions[id]!;
+    if (action.type !== 'Heal') {
+      continue;
+    }
+
+    const healer = workingPlayers[id];
+    const targetId = action.targetPlayerId ?? id;
+    const target = workingPlayers[targetId];
+
+    const result = resolveHeal(
+      healer,
+      target,
+      workingResources.medicine,
+      alreadyTreatedTargetIds,
+      config,
+    );
+    actionResultsMap.set(id, result);
+
+    if (result.success) {
+      alreadyTreatedTargetIds.add(targetId);
+
+      // Deduct medicine
+      workingResources = {
+        ...workingResources,
+        medicine: Math.max(0, workingResources.medicine - result.medicineSpent),
+      };
+
+      // Update target player HP & condition
+      const wasDown = getCondition(target, config) === 'DOWN';
+      const newTargetHp = wasDown
+        ? config.actions.heal.downRecoveryHp
+        : Math.min(target.maxHp, target.hp + result.hpRestored);
+
+      workingPlayers[targetId] = {
+        ...target,
+        hp: newTargetHp,
+        downDays: wasDown ? 0 : target.downDays,
+      };
+
+      if (wasDown) {
+        downRecoveries.push(targetId);
+      }
+    }
+
+    // Deduct energy from healer
+    workingPlayers[id] = {
+      ...workingPlayers[id],
+      energy: Math.max(0, workingPlayers[id].energy - result.energySpent),
+    };
+  }
+
+  // BuildSignal actions (synergy, wood downgrade, useless extra builder handling)
+  const buildSignalParticipants: { player: PlayerStatus }[] = [];
+  for (const id of validActionPlayerIds) {
+    const action = actions[id]!;
+    if (action.type === 'BuildSignal') {
+      buildSignalParticipants.push({ player: workingPlayers[id] });
+    }
+  }
+
   if (buildSignalParticipants.length > 0) {
     const buildResults = resolveBuildSignal(
       buildSignalParticipants,
@@ -198,44 +283,24 @@ export function resolveDay(
       config,
     );
     for (const bResult of buildResults) {
-      actionResults.push(bResult);
+      actionResultsMap.set(bResult.playerId, bResult);
+
       if (bResult.success && bResult.woodSpent > 0) {
         workingResources = {
           ...workingResources,
           wood: Math.max(0, workingResources.wood - bResult.woodSpent),
         };
       }
-    }
-  }
 
-  // Phase 2: Apply Action Resource & Player Status Updates
-  let totalSignalGained = 0;
-  for (const res of actionResults) {
-    if (res.actionType !== 'Heal') {
-      workingResources = {
-        food: workingResources.food + res.foodGained,
-        water: workingResources.water + res.waterGained,
-        wood: workingResources.wood + res.woodGained,
-        medicine: workingResources.medicine + res.medicineGained,
+      // Deduct energy from builder
+      workingPlayers[bResult.playerId] = {
+        ...workingPlayers[bResult.playerId],
+        energy: Math.max(0, workingPlayers[bResult.playerId].energy - bResult.energySpent),
       };
     }
-    totalSignalGained += res.signalGained;
-
-    const player = workingPlayers[res.playerId];
-    let newEnergy = Math.max(0, player.energy - res.energySpent);
-    if (res.actionType === 'Rest') {
-      newEnergy = Math.min(player.maxEnergy, newEnergy + config.actions.rest.energyRecovery);
-    }
-    let newHp = Math.max(0, Math.min(player.maxHp, player.hp - res.hpDamage + res.hpRestored));
-
-    workingPlayers[res.playerId] = {
-      ...player,
-      energy: newEnergy,
-      hp: newHp,
-    };
   }
 
-  // Phase 3: Ghost Intervention (if requested)
+  // Step 4: Ghost Intervention (if requested & available)
   let ghostUsed = false;
   let ghostMessage: string | undefined;
   let ghostUpdatedEvent: EventResult | undefined;
@@ -255,16 +320,61 @@ export function resolveDay(
       if (ghostRes.updatedEventResult) {
         ghostUpdatedEvent = ghostRes.updatedEventResult;
       }
+      if (ghostRes.updatedActionResult && ghostIntervention.targetPlayerId) {
+        const targetId = ghostIntervention.targetPlayerId;
+        const oldResult = actionResultsMap.get(targetId);
+        const newResult = ghostRes.updatedActionResult;
+
+        if (oldResult) {
+          // Revert old resource/player deltas and apply new result deltas
+          workingResources = {
+            food: Math.max(0, workingResources.food - oldResult.foodGained + newResult.foodGained),
+            water: Math.max(
+              0,
+              workingResources.water - oldResult.waterGained + newResult.waterGained,
+            ),
+            wood: Math.max(0, workingResources.wood - oldResult.woodGained + newResult.woodGained),
+            medicine: Math.max(
+              0,
+              Math.min(
+                config.maxMedicine,
+                workingResources.medicine - oldResult.medicineGained + newResult.medicineGained,
+              ),
+            ),
+          };
+
+          const p = workingPlayers[targetId];
+          const newHp = Math.max(
+            0,
+            Math.min(p.maxHp, p.hp + oldResult.hpDamage - newResult.hpDamage),
+          );
+          workingPlayers[targetId] = {
+            ...p,
+            hp: newHp,
+          };
+
+          actionResultsMap.set(targetId, newResult);
+        }
+      }
     }
   }
 
-  // Phase 4: Daily Event
-  const eventResult = ghostUpdatedEvent ?? resolveDailyEvent(state, eventStream);
-  const eventApplication = applyEventResult(workingPlayers, workingResources, eventResult);
+  // Assemble final ordered action results array
+  const actionResults: ActionResult[] = [];
+  for (const id of ALL_PLAYER_IDS) {
+    const res = actionResultsMap.get(id);
+    if (res) {
+      actionResults.push(res);
+    }
+  }
+
+  // Step 5: Daily Random Event
+  const eventResult = ghostUpdatedEvent ?? resolveDailyEvent(state, eventStream, config);
+  const eventApplication = applyEventResult(workingPlayers, workingResources, eventResult, config);
   workingPlayers = eventApplication.updatedPlayers;
   workingResources = eventApplication.updatedResources;
 
-  // Phase 5: Consumption & Needs Triage
+  // Step 6: Consumption & Needs Triage
   const consumptionReport = applyDailyConsumption(
     workingPlayers,
     workingResources,
@@ -274,7 +384,7 @@ export function resolveDay(
   workingPlayers = consumptionReport.updatedPlayers;
   workingResources = consumptionReport.remainingResources;
 
-  // Phase 6: Crisis Telemetry
+  // Step 7: Crisis Telemetry Check
   const livingPlayers = ALL_PLAYER_IDS.map((id) => workingPlayers[id]).filter(
     (p) => getCondition(p, config) !== 'Dead',
   );
@@ -285,7 +395,8 @@ export function resolveDay(
     hpCrisis: livingPlayers.some((p) => p.hp <= config.player.downHpThreshold),
   };
 
-  // Phase 7: Signal & Win/Lose Evaluation
+  // Step 8: Signal & Win/Lose Evaluation
+  const totalSignalGained = actionResults.reduce((sum, r) => sum + r.signalGained, 0);
   const currentSignal = state.signal.progress;
   const newSignalProgress = Math.min(100, currentSignal + totalSignalGained);
 
@@ -294,40 +405,40 @@ export function resolveDay(
   let endReason: string | undefined;
   let rescuePending = state.signal.rescuePending;
 
-  // Win/Lose state machine
+  // Win/Lose state machine with Day 20 Normal Win precedence
   if (livingPlayers.length === 0) {
     // Condition A: All players died
     nextPhase = 'ended';
     winner = false;
     endReason = 'All survivors have perished.';
-  } else if (state.phase === 'rescue_pending') {
-    // Condition B: Survived final day after reaching 100% signal
-    nextPhase = 'ended';
-    winner = true;
-    endReason = 'Early rescue achieved! Rescue helicopter extracted all remaining survivors.';
-  } else if (newSignalProgress >= config.timeline.earlyRescueSignal && state.phase === 'normal') {
-    // Reached 100% signal -> Rescue pending for next day
-    nextPhase = 'rescue_pending';
-    rescuePending = true;
   } else if (
     state.day === config.timeline.rescueDay &&
     newSignalProgress >= config.timeline.normalRescueSignal &&
     state.phase === 'normal'
   ) {
-    // Condition C: Normal rescue on Day 20 with signal >= 80%
+    // Condition B (Priority): Normal rescue on Day 20 with signal >= 80%
     nextPhase = 'ended';
     winner = true;
     endReason = `Normal rescue achieved on Day ${config.timeline.rescueDay} with ${newSignalProgress}% signal progress.`;
+  } else if (state.phase === 'rescue_pending') {
+    // Condition C: Survived final day after reaching 100% signal before Day 20
+    nextPhase = 'ended';
+    winner = true;
+    endReason = 'Early rescue achieved! Rescue helicopter extracted all remaining survivors.';
+  } else if (newSignalProgress >= config.timeline.earlyRescueSignal && state.phase === 'normal') {
+    // Reached 100% signal before Day 20 -> Rescue pending for next day
+    nextPhase = 'rescue_pending';
+    rescuePending = true;
   } else if (
     state.day >= config.timeline.rescueDay &&
     state.day < config.timeline.emergencyMaxDay &&
     newSignalProgress < config.timeline.normalRescueSignal &&
     state.phase === 'normal'
   ) {
-    // Transition to emergency window
+    // Transition to emergency window on Day 21+
     nextPhase = 'emergency';
   } else if (state.phase === 'emergency' && newSignalProgress >= config.timeline.earlyRescueSignal) {
-    // Reached 100% during emergency
+    // Reached 100% during emergency window
     nextPhase = 'ended';
     winner = true;
     endReason = 'Emergency rescue achieved with 100% signal progress!';
@@ -342,7 +453,7 @@ export function resolveDay(
     endReason = `Emergency rescue window expired on Day ${config.timeline.emergencyMaxDay} without completing the signal.`;
   }
 
-  // Phase 8: Next Weather & Next State Assembly
+  // Step 9: Next Weather & Assembly
   const nextWeather =
     nextPhase === 'ended'
       ? state.weather

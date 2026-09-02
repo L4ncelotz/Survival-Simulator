@@ -2,7 +2,6 @@ import { resolveExplore, resolveFindWater, resolveGatherWood, resolveHunt } from
 import type { ActionResult } from '../actions/types.js';
 import { DEFAULT_BALANCE_CONFIG, type BalanceConfig } from '../config/balance.js';
 import { resolveDailyEvent } from '../events/event-resolver.js';
-import type { EventResult } from '../events/event-types.js';
 import type { MultiStreamRNG } from '../rng/multi-stream.js';
 import { getCondition } from '../rules/condition.js';
 import type { ActionMap, GameState, WeatherType } from '../types.js';
@@ -41,7 +40,7 @@ export function resolveGhostIntervention(
   switch (request.targetRollType) {
     case 'event': {
       const eventStream = multiStreamRng.getStream('event');
-      const updatedEventResult = resolveDailyEvent(state, eventStream);
+      const updatedEventResult = resolveDailyEvent(state, eventStream, config);
       return {
         applied: true,
         targetRollType: 'event',
@@ -83,20 +82,38 @@ export function resolveGhostIntervention(
       const injuryStream = multiStreamRng.getStream('injury');
       const exploreStream = multiStreamRng.getStream('explore');
 
+      const hasMedic = Object.values(state.players).some(
+        (p) => p.trait === 'Medic' && getCondition(p, config) !== 'Dead',
+      );
+
       let updatedActionResult: ActionResult | undefined;
 
       switch (playerAction.type) {
         case 'Hunt':
-          updatedActionResult = resolveHunt(targetPlayer, actionStream, injuryStream, config);
+          updatedActionResult = resolveHunt(
+            targetPlayer,
+            actionStream,
+            injuryStream,
+            weather,
+            hasMedic,
+            config,
+          );
           break;
         case 'FindWater':
           updatedActionResult = resolveFindWater(targetPlayer, actionStream, weather, config);
           break;
         case 'GatherWood':
-          updatedActionResult = resolveGatherWood(targetPlayer, actionStream, config);
+          updatedActionResult = resolveGatherWood(targetPlayer, actionStream, weather, config);
           break;
         case 'Explore':
-          updatedActionResult = resolveExplore(targetPlayer, exploreStream, injuryStream, config);
+          updatedActionResult = resolveExplore(
+            targetPlayer,
+            exploreStream,
+            injuryStream,
+            weather,
+            hasMedic,
+            config,
+          );
           break;
         default:
           return {

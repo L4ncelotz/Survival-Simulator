@@ -50,18 +50,19 @@ describe('Day Resolver Orchestrator', () => {
     expect(nextState.players.P1.energy).toBe(10);
   });
 
-  it('triggers early rescue flow (rescue_pending -> win)', () => {
+  it('triggers early rescue flow (rescue_pending -> win) before Day 20', () => {
     const initialState = createGame(777);
     // Start with 90% signal and plenty of wood
     const state: GameState = {
       ...initialState,
-      signal: { progress: 90, maxProgress: 100, rescuePending: false },
+      day: 5,
       resources: { ...initialState.resources, wood: 20 },
+      signal: { progress: 90, maxProgress: 100, rescuePending: false },
     };
 
     const actions: ActionMap = {
-      P1: { playerId: 'P1', type: 'BuildSignal' }, // +10 or more -> hits 100%
-      P2: { playerId: 'P2', type: 'Rest' },
+      P1: { playerId: 'P1', type: 'BuildSignal' },
+      P2: { playerId: 'P2', type: 'BuildSignal' },
       P3: { playerId: 'P3', type: 'Rest' },
       P4: { playerId: 'P4', type: 'Rest' },
     };
@@ -77,16 +78,17 @@ describe('Day Resolver Orchestrator', () => {
     expect(day2Result.nextState.endReason).toContain('Early rescue achieved');
   });
 
-  it('triggers normal rescue on Day 20 with >= 80% signal', () => {
+  it('triggers normal rescue on Day 20 with >= 80% signal (takes priority over rescue_pending even if signal reaches 100%)', () => {
     const initialState = createGame(888);
     const state: GameState = {
       ...initialState,
       day: 20,
-      signal: { progress: 80, maxProgress: 100, rescuePending: false },
+      resources: { ...initialState.resources, wood: 20 },
+      signal: { progress: 95, maxProgress: 100, rescuePending: false },
     };
 
     const actions: ActionMap = {
-      P1: { playerId: 'P1', type: 'Rest' },
+      P1: { playerId: 'P1', type: 'BuildSignal' },
       P2: { playerId: 'P2', type: 'Rest' },
       P3: { playerId: 'P3', type: 'Rest' },
       P4: { playerId: 'P4', type: 'Rest' },
@@ -95,7 +97,8 @@ describe('Day Resolver Orchestrator', () => {
     const { nextState } = resolveDay(state, actions);
     expect(nextState.phase).toBe('ended');
     expect(nextState.winner).toBe(true);
-    expect(nextState.endReason).toContain('Normal rescue achieved');
+    expect(nextState.signal.progress).toBe(100);
+    expect(nextState.endReason).toContain('Normal rescue achieved on Day 20');
   });
 
   it('ends game with loss if all players die', () => {
@@ -105,10 +108,10 @@ describe('Day Resolver Orchestrator', () => {
       ...initialState,
       resources: { food: 0, water: 0, wood: 0, medicine: 0 },
       players: {
-        P1: { ...initialState.players.P1, hp: 1, downDays: 1, hunger: 60, thirst: 60 },
-        P2: { ...initialState.players.P2, hp: 1, downDays: 1, hunger: 60, thirst: 60 },
-        P3: { ...initialState.players.P3, hp: 1, downDays: 1, hunger: 60, thirst: 60 },
-        P4: { ...initialState.players.P4, hp: 1, downDays: 1, hunger: 60, thirst: 60 },
+        P1: { ...initialState.players.P1, hp: 1, downDays: 1, hunger: 80, thirst: 80 },
+        P2: { ...initialState.players.P2, hp: 1, downDays: 1, hunger: 80, thirst: 80 },
+        P3: { ...initialState.players.P3, hp: 1, downDays: 1, hunger: 80, thirst: 80 },
+        P4: { ...initialState.players.P4, hp: 1, downDays: 1, hunger: 80, thirst: 80 },
       },
     };
 

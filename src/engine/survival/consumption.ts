@@ -19,6 +19,10 @@ const ALL_PLAYER_IDS: readonly PlayerId[] = ['P1', 'P2', 'P3', 'P4'] as const;
 
 /**
  * Applies daily consumption triage, hunger/thirst updates, needs damage, and DOWN/Death progression.
+ * - Food triage: Highest Hunger gets food first (tie-breaker lowest HP, then player ID).
+ * - Water triage: Highest Thirst gets water first (tie-breaker lowest HP, then player ID).
+ * - Partial rations supported continuously.
+ * - Needs damage applied when hunger > 80 (-5 HP) and thirst > 80 (-8 HP).
  */
 export function applyDailyConsumption(
   players: Record<PlayerId, PlayerStatus>,
@@ -37,20 +41,78 @@ export function applyDailyConsumption(
     (id) => getCondition(players[id], config) !== 'Dead',
   );
 
-  // Triage order: lowest HP first, tie-breaker by PlayerId alphabetical
-  const sortedLivingPlayers = [...livingPlayerIds]
+  // 1. Food Triage: Highest Hunger first
+  const foodTriageOrder = [...livingPlayerIds]
     .map((id) => players[id])
     .sort((a, b) => {
+      if (a.hunger !== b.hunger) {
+        return b.hunger - a.hunger; // descending hunger
+      }
       if (a.hp !== b.hp) {
-        return a.hp - b.hp;
+        return a.hp - b.hp; // lowest HP tie-breaker
       }
       return a.id.localeCompare(b.id);
     });
 
+  const foodRationRatios: Partial<Record<PlayerId, number>> = {};
   const fedPlayers: PlayerId[] = [];
   const starvedPlayers: PlayerId[] = [];
+
+  for (const player of foodTriageOrder) {
+    const foodDemand =
+      config.dailyConsumption.foodPerPlayer *
+      emergencyMultiplier *
+      (player.trait === 'Hunter' ? config.dailyConsumption.hunterFoodMultiplier : 1.0);
+
+    if (remainingFood >= foodDemand) {
+      remainingFood -= foodDemand;
+      foodRationRatios[player.id] = 1.0;
+      fedPlayers.push(player.id);
+    } else if (remainingFood > 0) {
+      foodRationRatios[player.id] = remainingFood / foodDemand;
+      remainingFood = 0;
+      fedPlayers.push(player.id);
+    } else {
+      foodRationRatios[player.id] = 0.0;
+      starvedPlayers.push(player.id);
+    }
+  }
+
+  // 2. Water Triage: Highest Thirst first
+  const waterTriageOrder = [...livingPlayerIds]
+    .map((id) => players[id])
+    .sort((a, b) => {
+      if (a.thirst !== b.thirst) {
+        return b.thirst - a.thirst; // descending thirst
+      }
+      if (a.hp !== b.hp) {
+        return a.hp - b.hp; // lowest HP tie-breaker
+      }
+      return a.id.localeCompare(b.id);
+    });
+
+  const waterRationRatios: Partial<Record<PlayerId, number>> = {};
   const hydratedPlayers: PlayerId[] = [];
   const dehydratedPlayers: PlayerId[] = [];
+
+  for (const player of waterTriageOrder) {
+    const waterDemand = config.dailyConsumption.waterPerPlayer * emergencyMultiplier;
+
+    if (remainingWater >= waterDemand) {
+      remainingWater -= waterDemand;
+      waterRationRatios[player.id] = 1.0;
+      hydratedPlayers.push(player.id);
+    } else if (remainingWater > 0) {
+      waterRationRatios[player.id] = remainingWater / waterDemand;
+      remainingWater = 0;
+      hydratedPlayers.push(player.id);
+    } else {
+      waterRationRatios[player.id] = 0.0;
+      dehydratedPlayers.push(player.id);
+    }
+  }
+
+  // 3. Needs Progression & Damage for all living players
   const hungerDamagedPlayers: PlayerId[] = [];
   const thirstDamagedPlayers: PlayerId[] = [];
   const newlyDownPlayers: PlayerId[] = [];
@@ -58,56 +120,34 @@ export function applyDailyConsumption(
 
   const updatedPlayers: Record<PlayerId, PlayerStatus> = { ...players };
 
-  for (const player of sortedLivingPlayers) {
+  for (const id of livingPlayerIds) {
+    const player = players[id];
     const wasDown = getCondition(player, config) === 'DOWN';
 
-    // Calculate demands
-    const foodDemand =
-      config.dailyConsumption.foodPerPlayer *
-      emergencyMultiplier *
-      (player.trait === 'Hunter' ? config.dailyConsumption.hunterFoodMultiplier : 1.0);
+    const foodRatio = foodRationRatios[id] ?? 0.0;
+    const waterRatio = waterRationRatios[id] ?? 0.0;
 
-    const waterDemand = config.dailyConsumption.waterPerPlayer * emergencyMultiplier;
+    // Hunger delta: -30 when ratio=1.0, +25 when ratio=0.0
+    const hungerDelta =
+      -config.dailyConsumption.hungerReliefFed * foodRatio +
+      config.dailyConsumption.hungerGainUnfed * (1.0 - foodRatio);
+    const newHunger = Math.max(0, Math.min(100, Math.round(player.hunger + hungerDelta)));
 
-    // Triage food
-    let fed = false;
-    if (remainingFood >= foodDemand) {
-      remainingFood -= foodDemand;
-      fed = true;
-      fedPlayers.push(player.id);
-    } else {
-      starvedPlayers.push(player.id);
-    }
+    // Thirst delta: -30 when ratio=1.0, +25 when ratio=0.0
+    const thirstDelta =
+      -config.dailyConsumption.thirstReliefHydrated * waterRatio +
+      config.dailyConsumption.thirstGainUnhydrated * (1.0 - waterRatio);
+    const newThirst = Math.max(0, Math.min(100, Math.round(player.thirst + thirstDelta)));
 
-    // Triage water
-    let hydrated = false;
-    if (remainingWater >= waterDemand) {
-      remainingWater -= waterDemand;
-      hydrated = true;
-      hydratedPlayers.push(player.id);
-    } else {
-      dehydratedPlayers.push(player.id);
-    }
-
-    // Needs progression
-    const newHunger = fed
-      ? Math.max(0, player.hunger - 10)
-      : Math.min(100, player.hunger + 20);
-
-    const newThirst = hydrated
-      ? Math.max(0, player.thirst - 15)
-      : Math.min(100, player.thirst + 30);
-
-    // Needs damage
+    // Needs damage: hunger > 80 => -5 HP, thirst > 80 => -8 HP
     let damage = 0;
-    if (newHunger >= config.needsDamage.hungerThreshold) {
+    if (newHunger > config.needsDamage.hungerThreshold) {
       damage += config.needsDamage.hungerHpDamage;
-      hungerDamagedPlayers.push(player.id);
+      hungerDamagedPlayers.push(id);
     }
-
-    if (newThirst >= config.needsDamage.thirstThreshold) {
+    if (newThirst > config.needsDamage.thirstThreshold) {
       damage += config.needsDamage.thirstHpDamage;
-      thirstDamagedPlayers.push(player.id);
+      thirstDamagedPlayers.push(id);
     }
 
     let newHp = Math.max(0, player.hp - damage);
@@ -117,22 +157,22 @@ export function applyDailyConsumption(
       newDownDays = player.downDays + 1;
       if (newHp <= 0 || newDownDays >= config.player.downMaxDays) {
         newHp = 0;
-        newDeaths.push(player.id);
+        newDeaths.push(id);
       }
     } else {
       // Previously Healthy or Injured
       if (newHp <= 0) {
         newHp = 0;
-        newDeaths.push(player.id);
+        newDeaths.push(id);
       } else if (newHp <= config.player.downHpThreshold) {
         newDownDays = 0;
-        newlyDownPlayers.push(player.id);
+        newlyDownPlayers.push(id);
       } else {
         newDownDays = 0;
       }
     }
 
-    updatedPlayers[player.id] = {
+    updatedPlayers[id] = {
       ...player,
       hp: newHp,
       hunger: newHunger,

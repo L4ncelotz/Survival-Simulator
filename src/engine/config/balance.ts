@@ -2,6 +2,7 @@ import type { ResourcePool, WeatherType } from '../types.js';
 
 export interface BalanceConfig {
   readonly startingResources: ResourcePool;
+  readonly maxMedicine: number;
   readonly player: {
     readonly maxHp: number;
     readonly maxEnergy: number;
@@ -17,6 +18,10 @@ export interface BalanceConfig {
     readonly waterPerPlayer: number;
     readonly hunterFoodMultiplier: number;
     readonly emergencyMultiplier: number;
+    readonly hungerGainUnfed: number;
+    readonly thirstGainUnhydrated: number;
+    readonly hungerReliefFed: number;
+    readonly thirstReliefHydrated: number;
   };
   readonly timeline: {
     readonly rescueDay: number;
@@ -30,7 +35,8 @@ export interface BalanceConfig {
       readonly energyCost: number;
       readonly minFood: number;
       readonly maxFood: number;
-      readonly hunterFoodBonus: number;
+      readonly hunterMultiplier: number;
+      readonly rainMultiplier: number;
       readonly injuryChance: number;
     };
     readonly findWater: {
@@ -43,12 +49,16 @@ export interface BalanceConfig {
       readonly energyCost: number;
       readonly minWood: number;
       readonly maxWood: number;
+      readonly rainWoodPenalty: number;
       readonly builderBonusWood: number;
     };
     readonly explore: {
       readonly energyCost: number;
       readonly medicineChance: number;
+      readonly scoutMedicineMultiplier: number;
       readonly scoutInjuryReduction: number;
+      readonly stormInjuryMultiplier: number;
+      readonly hazardChance: number;
     };
     readonly rest: {
       readonly energyRecovery: number;
@@ -65,9 +75,11 @@ export interface BalanceConfig {
       readonly energyCost: number;
       readonly woodCost: number;
       readonly builderWoodCost: number;
-      readonly signalGain: number;
+      readonly singleSignalGain: number;
+      readonly maxDailySignalGain: number;
     };
   };
+  readonly medicTeamInjuryReduction: number;
   readonly needsDamage: {
     readonly hungerHpDamage: number;
     readonly thirstHpDamage: number;
@@ -86,6 +98,7 @@ export const DEFAULT_BALANCE_CONFIG: BalanceConfig = {
     wood: 10,
     medicine: 2,
   },
+  maxMedicine: 3,
   player: {
     maxHp: 100,
     maxEnergy: 100,
@@ -101,6 +114,10 @@ export const DEFAULT_BALANCE_CONFIG: BalanceConfig = {
     waterPerPlayer: 3,
     hunterFoodMultiplier: 1.25,
     emergencyMultiplier: 1.5,
+    hungerGainUnfed: 25,
+    thirstGainUnhydrated: 25,
+    hungerReliefFed: 30,
+    thirstReliefHydrated: 30,
   },
   timeline: {
     rescueDay: 20,
@@ -118,25 +135,30 @@ export const DEFAULT_BALANCE_CONFIG: BalanceConfig = {
       energyCost: 25,
       minFood: 4,
       maxFood: 8,
-      hunterFoodBonus: 2,
+      hunterMultiplier: 1.4,
+      rainMultiplier: 0.7,
       injuryChance: 0.15,
     },
     findWater: {
       energyCost: 20,
       minWater: 6,
       maxWater: 10,
-      rainBonusWater: 4,
+      rainBonusWater: 2,
     },
     gatherWood: {
       energyCost: 20,
       minWood: 3,
       maxWood: 5,
+      rainWoodPenalty: 2,
       builderBonusWood: 2,
     },
     explore: {
       energyCost: 30,
       medicineChance: 0.25,
+      scoutMedicineMultiplier: 1.2,
       scoutInjuryReduction: 0.5,
+      stormInjuryMultiplier: 2.0,
+      hazardChance: 0.20,
     },
     rest: {
       energyRecovery: 40,
@@ -152,15 +174,17 @@ export const DEFAULT_BALANCE_CONFIG: BalanceConfig = {
     buildSignal: {
       energyCost: 30,
       woodCost: 5,
-      builderWoodCost: 3,
-      signalGain: 10,
+      builderWoodCost: 4,
+      singleSignalGain: 8,
+      maxDailySignalGain: 12,
     },
   },
+  medicTeamInjuryReduction: 0.85,
   needsDamage: {
-    hungerHpDamage: 15,
-    thirstHpDamage: 25,
-    hungerThreshold: 60,
-    thirstThreshold: 60,
+    hungerHpDamage: 5,
+    thirstHpDamage: 8,
+    hungerThreshold: 80,
+    thirstThreshold: 80,
   },
   ghost: {
     maxInterventionsPerDay: 1,

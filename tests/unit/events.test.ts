@@ -17,16 +17,16 @@ describe('Event System', () => {
     expect(['positive', 'neutral', 'negative']).toContain(result.category);
   });
 
-  it('shifts distribution toward positive events when crisis is active (Pity weighting)', () => {
+  it('maintains consistent category distribution independent of crisis state (telemetry only)', () => {
     const normalState = createGame(100);
     const crisisState: GameState = {
       ...normalState,
-      crisis: { foodCrisis: true, waterCrisis: false, hpCrisis: false },
+      crisis: { foodCrisis: true, waterCrisis: true, hpCrisis: true },
     };
 
     let normalPositives = 0;
     let crisisPositives = 0;
-    const trials = 1000;
+    const trials = 500;
 
     for (let i = 0; i < trials; i++) {
       const stream1 = new RNGStream(i + 1);
@@ -38,13 +38,35 @@ describe('Event System', () => {
       if (res2.category === 'positive') crisisPositives++;
     }
 
-    // Normal positive weight is 35%, crisis positive weight is 65%
-    expect(crisisPositives).toBeGreaterThan(normalPositives);
-    expect(crisisPositives / trials).toBeGreaterThan(0.55);
-    expect(normalPositives / trials).toBeLessThan(0.45);
+    // Both should produce identical results because crisis does not independently alter event probabilities
+    expect(crisisPositives).toBe(normalPositives);
   });
 
-  it('correctly applies event resource and player deltas without dropping resources below 0', () => {
+  it('correctly applies event resource deltas and caps medicine at maxMedicine (3)', () => {
+    const state = createGame(555);
+    const resources: ResourcePool = { food: 10, water: 10, wood: 5, medicine: 3 };
+
+    const medicalCacheResult = {
+      eventId: 'MedicalCache',
+      name: 'Medical Cache',
+      description: 'Medical cache',
+      category: 'positive' as const,
+      resourceDelta: { medicine: 1 },
+      hpDelta: {},
+      energyDelta: {},
+    };
+
+    const { updatedResources } = applyEventResult(
+      state.players,
+      resources,
+      medicalCacheResult,
+    );
+
+    // Should cap at 3
+    expect(updatedResources.medicine).toBe(3);
+  });
+
+  it('correctly applies negative event deltas without dropping resources below 0', () => {
     const state = createGame(555);
     const lowResources: ResourcePool = { food: 1, water: 1, wood: 0, medicine: 0 };
 
