@@ -38,14 +38,20 @@ const ALL_PLAYER_IDS: readonly PlayerId[] = ['P1', 'P2', 'P3', 'P4'] as const;
 
 /**
  * Resolves a daily event using the event RNG stream.
- * Crisis state is telemetry only and does NOT alter event probabilities.
+ * Crisis state (foodCrisis/waterCrisis/hpCrisis flags) is telemetry only and does NOT alter event
+ * probabilities. However, raw resource levels < 20 do trigger pity weight increase on positive events.
  */
 export function resolveDailyEvent(
   state: GameState,
   eventStream: RNGStream,
   config: BalanceConfig = DEFAULT_BALANCE_CONFIG,
 ): EventResult {
-  const weights = NORMAL_WEIGHTS;
+  // Pity system: low raw resource levels (< 20) increase positive event weight.
+  // Crisis flags (foodCrisis/waterCrisis/hpCrisis) are telemetry only and do NOT affect weights.
+  let positiveWeight = NORMAL_WEIGHTS.positive;
+  if (state.resources.food < 20) positiveWeight *= 1.5;
+  if (state.resources.water < 20) positiveWeight *= 1.5;
+  const weights = { positive: positiveWeight, neutral: NORMAL_WEIGHTS.neutral, negative: NORMAL_WEIGHTS.negative };
   const totalWeight = weights.positive + weights.neutral + weights.negative;
   const roll = eventStream.next() * totalWeight;
 

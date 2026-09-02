@@ -6,8 +6,7 @@ A deterministic, 4-player survival simulation engine written in pure TypeScript,
 ## Architecture Principles
 1. **Engine Separation**: The game engine is pure business logic with no DOM, browser, or framework dependencies.
 2. **Determinism**: Given the same seed and action sequence, the engine MUST produce the exact same state transitions.
-3. **Multi-Stream PRNG**: RNG uses separate sub-streams (`init`, `action`, `weather`, `event`, `injury`, `ghost`) to prevent action desync from affecting unrelated rolls.
-4. **Immutability**: `GameState` transformations are pure functions returning new state objects (`createGame`, `resolveDay`).
+3. **Multi-Stream PRNG**: RNG uses separate sub-streams (`init`, `action`, `weather`, `event`, `injury`, `explore`) to prevent action desync from affecting unrelated rolls.
 5. **Single Source of Truth**: Condition state is derived from HP and down timers.
 
 ## Commands

@@ -46,7 +46,12 @@ export function runSimulation(
   let totalSignalProgress = 0;
   let totalDeaths = 0;
   let energyBlockCount = 0;
-
+  let totalWinDays = 0;
+  let deathBeforeDay5Count = 0;
+  let totalDownEvents = 0;
+  let totalDownRecoveries = 0;
+  let totalHealAttempts = 0;
+  let totalMedicineStarvations = 0;
   const actionDistribution: Record<ActionType, number> = {
     Hunt: 0,
     FindWater: 0,
@@ -65,6 +70,7 @@ export function runSimulation(
 
     if (result.win) {
       wins++;
+      totalWinDays += result.totalDays;
       if (result.endReason.includes('Early')) {
         earlyRescueCount++;
       } else if (result.endReason.includes('Normal')) {
@@ -94,12 +100,26 @@ export function runSimulation(
       }
     }
 
+    // Early death detection
+    const hadEarlyDeath = result.logs.some(
+      (log) => log.deaths.length > 0 && log.day <= 4,
+    );
+    if (hadEarlyDeath) deathBeforeDay5Count++;
+
     // Accumulate action logs
     for (const log of result.logs) {
+      totalDownEvents += log.newlyDownPlayers.length;
+      totalDownRecoveries += log.downRecoveries.length;
       for (const act of log.actionResults) {
         actionDistribution[act.actionType]++;
         if (!act.success && act.message.includes('exhausted')) {
           energyBlockCount++;
+        }
+        if (act.actionType === 'Heal') {
+          totalHealAttempts++;
+          if (!act.success && act.message.includes('no medicine')) {
+            totalMedicineStarvations++;
+          }
         }
       }
     }
@@ -120,9 +140,14 @@ export function runSimulation(
     averageEndingWater: totalEndingWater / totalGames,
     averageEndingWood: totalEndingWood / totalGames,
     averageEndingMedicine: totalEndingMedicine / totalGames,
-    averageSignalProgress: totalSignalProgress / totalGames,
     totalDeaths,
+    averageSignalProgress: totalSignalProgress / totalGames,
     actionDistribution: Object.freeze(actionDistribution),
     energyBlockCount,
+    averageRescueDay: wins > 0 ? totalWinDays / wins : 0,
+    deathBeforeDay5Count,
+    downRecoveryRate: totalDownEvents > 0 ? totalDownRecoveries / totalDownEvents : 0,
+    medicineStarvationRate: totalHealAttempts > 0 ? totalMedicineStarvations / totalHealAttempts : 0,
+    energyOpportunityBlockRate: totalGames > 0 ? energyBlockCount / (totalGames * 4 * 20) : 0,
   };
 }

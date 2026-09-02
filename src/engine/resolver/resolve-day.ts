@@ -326,7 +326,9 @@ export function resolveDay(
         const newResult = ghostRes.updatedActionResult;
 
         if (oldResult) {
-          // Revert old resource/player deltas and apply new result deltas
+          // Revert old resource/player deltas and apply new result deltas.
+          // Note: Energy deducted in Step 2 is NOT reverted. All rerollable actions
+          // (Hunt/FindWater/GatherWood/Explore) share the same energy cost, so this is a no-op delta.
           workingResources = {
             food: Math.max(0, workingResources.food - oldResult.foodGained + newResult.foodGained),
             water: Math.max(
@@ -488,7 +490,6 @@ export function resolveDay(
     wood: workingResources.wood - state.resources.wood,
     medicine: workingResources.medicine - state.resources.medicine,
   };
-
   const log: DayLog = {
     day: state.day,
     weather: state.weather,
@@ -499,6 +500,7 @@ export function resolveDay(
     resourceDeltas: Object.freeze(resourceDeltas),
     deaths: consumptionReport.newDeaths,
     downRecoveries: Object.freeze(downRecoveries),
+    newlyDownPlayers: Object.freeze(consumptionReport.newlyDownPlayers),
   };
 
   return {

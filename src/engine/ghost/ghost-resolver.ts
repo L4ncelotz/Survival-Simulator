@@ -39,6 +39,8 @@ export function resolveGhostIntervention(
 
   switch (request.targetRollType) {
     case 'event': {
+      // The event stream has not yet been drawn at this point in the pipeline (Step 4 precedes Step 5).
+      // This IS the first draw from the event stream; there is no prior value to discard.
       const eventStream = multiStreamRng.getStream('event');
       const updatedEventResult = resolveDailyEvent(state, eventStream, config);
       return {

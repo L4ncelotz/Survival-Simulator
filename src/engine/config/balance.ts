@@ -50,7 +50,6 @@ export interface BalanceConfig {
       readonly minWood: number;
       readonly maxWood: number;
       readonly rainWoodPenalty: number;
-      readonly builderBonusWood: number;
     };
     readonly explore: {
       readonly energyCost: number;
@@ -59,6 +58,7 @@ export interface BalanceConfig {
       readonly scoutInjuryReduction: number;
       readonly stormInjuryMultiplier: number;
       readonly hazardChance: number;
+      readonly rareFindChance: number;
     };
     readonly rest: {
       readonly energyRecovery: number;
@@ -68,7 +68,7 @@ export interface BalanceConfig {
       readonly energyCost: number;
       readonly medicineCost: number;
       readonly hpRestored: number;
-      readonly medicHpBonus: number;
+      readonly medicMultiplier: number;
       readonly downRecoveryHp: number;
     };
     readonly buildSignal: {
@@ -147,10 +147,9 @@ export const DEFAULT_BALANCE_CONFIG: BalanceConfig = {
     },
     gatherWood: {
       energyCost: 20,
-      minWood: 3,
+      minWood: 2,
       maxWood: 5,
       rainWoodPenalty: 2,
-      builderBonusWood: 2,
     },
     explore: {
       energyCost: 30,
@@ -159,6 +158,7 @@ export const DEFAULT_BALANCE_CONFIG: BalanceConfig = {
       scoutInjuryReduction: 0.5,
       stormInjuryMultiplier: 2.0,
       hazardChance: 0.20,
+      rareFindChance: 0.25,
     },
     rest: {
       energyRecovery: 40,
@@ -168,13 +168,13 @@ export const DEFAULT_BALANCE_CONFIG: BalanceConfig = {
       energyCost: 20,
       medicineCost: 1,
       hpRestored: 40,
-      medicHpBonus: 20,
-      downRecoveryHp: 30,
+      medicMultiplier: 1.5,
+      downRecoveryHp: 35,
     },
     buildSignal: {
       energyCost: 30,
-      woodCost: 5,
-      builderWoodCost: 4,
+      woodCost: 4,
+      builderWoodCost: 3,
       singleSignalGain: 8,
       maxDailySignalGain: 12,
     },

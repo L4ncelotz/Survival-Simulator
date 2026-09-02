@@ -15,6 +15,8 @@ export class GreedyBot implements BotStrategy {
     const actions: Partial<Record<PlayerId, PlayerAction>> = {};
     let simulatedMedicine = state.resources.medicine;
     let simulatedWood = state.resources.wood;
+    let simulatedFood = state.resources.food;
+    let simulatedWater = state.resources.water;
 
     const livingPlayers = ALL_PLAYER_IDS.map((id) => state.players[id]).filter(
       (p) => getCondition(p, config) !== 'Dead',
@@ -62,6 +64,7 @@ export class GreedyBot implements BotStrategy {
     }
 
     // Step 2: Assign remaining players based on immediate greedy survival priorities
+    const livingCount = livingPlayers.length;
     for (const id of ALL_PLAYER_IDS) {
       if (actions[id]) {
         continue;
@@ -79,15 +82,18 @@ export class GreedyBot implements BotStrategy {
         continue;
       }
 
-      // Urgent Food
-      if (state.resources.food < 6 && player.energy >= config.actions.hunt.energyCost) {
+      // Urgent Food — only assign Hunt if food is genuinely insufficient for living players
+      const foodThreshold = livingCount * config.dailyConsumption.foodPerPlayer * 1.2;
+      if (simulatedFood < foodThreshold && player.energy >= config.actions.hunt.energyCost) {
         actions[id] = { playerId: id, type: 'Hunt' };
+        simulatedFood -= config.actions.hunt.minFood;
         continue;
       }
-
-      // Urgent Water
-      if (state.resources.water < 6 && player.energy >= config.actions.findWater.energyCost) {
+      // Urgent Water — only assign FindWater if water is genuinely insufficient
+      const waterThreshold = livingCount * config.dailyConsumption.waterPerPlayer * 1.2;
+      if (simulatedWater < waterThreshold && player.energy >= config.actions.findWater.energyCost) {
         actions[id] = { playerId: id, type: 'FindWater' };
+        simulatedWater -= config.actions.findWater.minWater;
         continue;
       }
 

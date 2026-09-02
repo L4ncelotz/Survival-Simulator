@@ -19,4 +19,9 @@ export interface SimulationMetrics {
   readonly totalDeaths: number;
   readonly actionDistribution: Record<ActionType, number>;
   readonly energyBlockCount: number;
+  readonly averageRescueDay: number;
+  readonly deathBeforeDay5Count: number;
+  readonly downRecoveryRate: number;
+  readonly medicineStarvationRate: number;
+  readonly energyOpportunityBlockRate: number;
 }

@@ -32,11 +32,12 @@ describe('Turn Pipeline Order & Spec Invariants', () => {
     const p2Result = log.actionResults.find((r) => r.playerId === 'P2');
 
     expect(p1Result?.success).toBe(true);
-    expect(p1Result?.woodGained).toBeGreaterThanOrEqual(5);
+    expect(p1Result?.woodGained).toBeGreaterThanOrEqual(2);
+    // P1 must gather ≥3 wood for P2 Builder to afford BuildSignal (3 wood cost)
 
     // P2 BuildSignal must succeed using the wood gathered by P1 today!
     expect(p2Result?.success).toBe(true);
-    expect(p2Result?.woodSpent).toBe(4);
+    expect(p2Result?.woodSpent).toBe(3);
     expect(p2Result?.signalGained).toBe(8);
     expect(nextState.signal.progress).toBe(8);
   });
@@ -130,8 +131,8 @@ describe('Turn Pipeline Order & Spec Invariants', () => {
       resources: { ...initialState.resources, wood: 7, food: 30, water: 30 },
       players: {
         ...initialState.players,
-        P1: { ...initialState.players.P1, trait: 'Scout', energy: 100 }, // costs 5
-        P2: { ...initialState.players.P2, trait: 'Hunter', energy: 100 }, // costs 5
+        P1: { ...initialState.players.P1, trait: 'Scout', energy: 100 }, // costs 4
+        P2: { ...initialState.players.P2, trait: 'Hunter', energy: 100 }, // costs 4
       },
       weather: 'Clear',
     };
@@ -149,7 +150,7 @@ describe('Turn Pipeline Order & Spec Invariants', () => {
     const p2Result = log.actionResults.find((r) => r.playerId === 'P2');
 
     expect(p1Result?.success).toBe(true);
-    expect(p1Result?.woodSpent).toBe(5);
+    expect(p1Result?.woodSpent).toBe(4);
     expect(p1Result?.signalGained).toBe(8);
 
     expect(p2Result?.success).toBe(false);
@@ -157,7 +158,7 @@ describe('Turn Pipeline Order & Spec Invariants', () => {
     expect(p2Result?.signalGained).toBe(0);
     expect(p2Result?.message).toContain('insufficient wood');
 
-    expect(nextState.resources.wood).toBe(2);
+    expect(nextState.resources.wood).toBe(3);
     expect(nextState.signal.progress).toBe(8);
   });
 

@@ -68,7 +68,7 @@ export function resolveHeal(
   const medicineSpent = config.actions.heal.medicineCost;
 
   if (targetCondition === 'DOWN') {
-    // Revive DOWN player to designated downRecoveryHp (30 HP)
+    // Revive DOWN player to designated downRecoveryHp (35 HP)
     const hpRestored = Math.max(0, config.actions.heal.downRecoveryHp - target.hp);
 
     return {
@@ -91,8 +91,8 @@ export function resolveHeal(
   }
 
   // Healing Healthy or Injured target
-  const medicBonus = healer.trait === 'Medic' ? config.actions.heal.medicHpBonus : 0;
-  const potentialHeal = config.actions.heal.hpRestored + medicBonus;
+  const healMultiplier = healer.trait === 'Medic' ? config.actions.heal.medicMultiplier : 1.0;
+  const potentialHeal = Math.round(config.actions.heal.hpRestored * healMultiplier);
   const hpRestored = Math.min(target.maxHp - target.hp, potentialHeal);
 
   return {
@@ -109,9 +109,8 @@ export function resolveHeal(
     hpRestored,
     hpDamage: 0,
     signalGained: 0,
-    targetPlayerId: target.id,
     message: `${healer.name} (${healer.trait}) treated ${target.name}'s wounds for ${hpRestored} HP${
-      medicBonus > 0 ? ` (+${medicBonus} Medic bonus)` : ''
+      healMultiplier > 1.0 ? ` (×${healMultiplier} Medic multiplier)` : ''
     }.`,
   };
 }

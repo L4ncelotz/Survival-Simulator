@@ -12,6 +12,7 @@ export interface DayLog {
   readonly resourceDeltas: Readonly<ResourcePool>;
   readonly deaths: readonly PlayerId[];
   readonly downRecoveries: readonly PlayerId[];
+  readonly newlyDownPlayers: readonly PlayerId[];
 }
 
 export interface DayResolutionResult {

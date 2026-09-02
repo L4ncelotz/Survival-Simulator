@@ -130,15 +130,15 @@ export class PlannerBot implements BotStrategy {
           p.energy >= config.actions.buildSignal.energyCost,
       );
 
-      const builderCost = config.actions.buildSignal.builderWoodCost; // 3
-      const standardCost = config.actions.buildSignal.woodCost; // 5
+      const builderCost = config.actions.buildSignal.builderWoodCost;
+      const standardCost = config.actions.buildSignal.woodCost;
 
       if (builderPlayer && simulatedWood >= builderCost) {
         actions[builderPlayer.id] = { playerId: builderPlayer.id, type: 'BuildSignal' };
         assignedPlayerIds.add(builderPlayer.id);
         simulatedWood -= builderCost;
 
-        // Try to find a second builder for 25 synergy if we have enough wood
+        // Try to find a second builder for cooperative synergy (+12 max signal/day) if we have enough wood
         if (simulatedWood >= standardCost) {
           const secondBuilder = livingPlayers.find(
             (p) =>

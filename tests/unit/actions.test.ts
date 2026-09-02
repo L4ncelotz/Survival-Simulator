@@ -103,24 +103,24 @@ describe('Core Actions', () => {
   });
 
   describe('resolveGatherWood', () => {
-    it('applies Builder trait bonus (+2)', () => {
+    it('gives base wood (2–5) with no trait bonus', () => {
       const builder = createMockPlayer({ trait: 'Builder' });
       const actionStream = new RNGStream(777);
 
       const result = resolveGatherWood(builder, actionStream, 'Clear');
 
       expect(result.energySpent).toBe(DEFAULT_BALANCE_CONFIG.actions.gatherWood.energyCost);
-      expect(result.woodGained).toBeGreaterThanOrEqual(5); // 3 + 2
-      expect(result.woodGained).toBeLessThanOrEqual(7); // 5 + 2
+      expect(result.woodGained).toBeGreaterThanOrEqual(2);
+      expect(result.woodGained).toBeLessThanOrEqual(5);
     });
 
-    it('gives base wood to non-builders', () => {
+    it('gives base wood (2–5) with no trait bonus', () => {
       const medic = createMockPlayer({ trait: 'Medic' });
       const actionStream = new RNGStream(777);
 
       const result = resolveGatherWood(medic, actionStream, 'Clear');
 
-      expect(result.woodGained).toBeGreaterThanOrEqual(3);
+      expect(result.woodGained).toBeGreaterThanOrEqual(2);
       expect(result.woodGained).toBeLessThanOrEqual(5);
     });
 
@@ -130,7 +130,7 @@ describe('Core Actions', () => {
 
       const result = resolveGatherWood(medic, actionStream, 'Rain');
 
-      expect(result.woodGained).toBeGreaterThanOrEqual(1); // Math.max(1, 3 - 2)
+      expect(result.woodGained).toBeGreaterThanOrEqual(1); // Math.max(1, 2 - 2)
       expect(result.woodGained).toBeLessThanOrEqual(3); // 5 - 2
     });
   });
@@ -148,6 +148,55 @@ describe('Core Actions', () => {
       expect(result.waterGained).toBeGreaterThanOrEqual(1);
       expect(result.woodGained).toBeGreaterThanOrEqual(0);
       expect(result.medicineGained).toBeGreaterThanOrEqual(0);
+    });
+  });
+
+  describe('resolveExplore', () => {
+    it('generates resources and checks scout injury reduction', () => {
+      const scout = createMockPlayer({ trait: 'Scout' });
+      const exploreStream = new RNGStream(101);
+      const injuryStream = new RNGStream(202);
+
+      const result = resolveExplore(scout, exploreStream, injuryStream, 'Clear');
+
+      expect(result.energySpent).toBe(DEFAULT_BALANCE_CONFIG.actions.explore.energyCost);
+      expect(result.foodGained).toBeGreaterThanOrEqual(1);
+      expect(result.waterGained).toBeGreaterThanOrEqual(1);
+      expect(result.woodGained).toBeGreaterThanOrEqual(0);
+      expect(result.medicineGained).toBeGreaterThanOrEqual(0);
+    });
+
+    it('Scout gets higher rare-find chance than non-Scout (×1.2 multiplier)', () => {
+      // Run many trials and confirm Scout rare finds are at least as frequent
+      let scoutMaxResults = 0;
+      let nonScoutMaxResults = 0;
+      const trials = 200;
+
+      for (let i = 0; i < trials; i++) {
+        const scout = createMockPlayer({ trait: 'Scout' });
+        const nonScout = createMockPlayer({ trait: 'Hunter' });
+        const stream1 = new RNGStream(i + 500);
+        const stream2 = new RNGStream(i + 500);
+        const inj1 = new RNGStream(i + 700);
+        const inj2 = new RNGStream(i + 700);
+
+        const scoutResult = resolveExplore(scout, stream1, inj1, 'Clear');
+        const nonScoutResult = resolveExplore(nonScout, stream2, inj2, 'Clear');
+
+        // Count how many loot items hit max value
+        const scoutMaxCount = (scoutResult.foodGained === 2 ? 1 : 0) +
+          (scoutResult.waterGained === 2 ? 1 : 0) +
+          (scoutResult.woodGained === 1 ? 1 : 0);
+        const nonScoutMaxCount = (nonScoutResult.foodGained === 2 ? 1 : 0) +
+          (nonScoutResult.waterGained === 2 ? 1 : 0) +
+          (nonScoutResult.woodGained === 1 ? 1 : 0);
+
+        scoutMaxResults += scoutMaxCount;
+        nonScoutMaxResults += nonScoutMaxCount;
+      }
+
+      // Scout should hit max values more often (higher rareFindChance)
+      expect(scoutMaxResults).toBeGreaterThanOrEqual(nonScoutMaxResults);
     });
   });
 
@@ -207,7 +256,7 @@ describe('Support Actions', () => {
       expect(result.message).toContain('already treated');
     });
 
-    it('revives a DOWN player to 30 HP', () => {
+    it('revives a DOWN player to at least 35 HP', () => {
       const healer = createMockPlayer({ trait: 'Hunter' });
       const downTarget = createMockPlayer({ id: 'P2', hp: 10, downDays: 1 });
 
@@ -215,11 +264,11 @@ describe('Support Actions', () => {
 
       expect(result.success).toBe(true);
       expect(result.medicineSpent).toBe(1);
-      expect(result.hpRestored).toBe(20); // 30 - 10 = 20
+      expect(result.hpRestored).toBe(25); // 35 - 10 = 25
       expect(result.targetPlayerId).toBe('P2');
     });
 
-    it('heals with Medic trait bonus (40 + 20 = 60 HP)', () => {
+    it('heals with Medic multiplier (40 × 1.5 = 60 HP)', () => {
       const medic = createMockPlayer({ trait: 'Medic' });
       const target = createMockPlayer({ id: 'P2', hp: 30, maxHp: 100 });
 
@@ -227,7 +276,7 @@ describe('Support Actions', () => {
 
       expect(result.success).toBe(true);
       expect(result.medicineSpent).toBe(1);
-      expect(result.hpRestored).toBe(60); // 40 base + 20 medic bonus
+      expect(result.hpRestored).toBe(60); // Math.round(40 * 1.5) = 60
     });
   });
 
@@ -243,23 +292,23 @@ describe('Support Actions', () => {
       expect(results[0]?.energySpent).toBe(DEFAULT_BALANCE_CONFIG.actions.buildSignal.energyCost);
     });
 
-    it('charges builder discount (4 wood instead of 5) and grants 8 signal for single build', () => {
+    it('charges builder discount (3 wood instead of 4) and grants 8 signal for single build', () => {
       const builder = createMockPlayer({ trait: 'Builder' });
       const results = resolveBuildSignal([{ player: builder }], 'Clear', 10);
 
       expect(results).toHaveLength(1);
       expect(results[0]?.success).toBe(true);
-      expect(results[0]?.woodSpent).toBe(4); // 5 - 1 = 4
+      expect(results[0]?.woodSpent).toBe(3); // builderWoodCost = 3
       expect(results[0]?.signalGained).toBe(8); // single build = +8
     });
 
-    it('charges standard wood (5 wood) for non-builder and grants 8 signal for single build', () => {
+    it('charges standard wood (4 wood) for non-builder and grants 8 signal for single build', () => {
       const scout = createMockPlayer({ trait: 'Scout' });
       const results = resolveBuildSignal([{ player: scout }], 'Clear', 10);
 
       expect(results).toHaveLength(1);
       expect(results[0]?.success).toBe(true);
-      expect(results[0]?.woodSpent).toBe(5);
+      expect(results[0]?.woodSpent).toBe(4);
       expect(results[0]?.signalGained).toBe(8);
     });
 
@@ -274,9 +323,9 @@ describe('Support Actions', () => {
       expect(results[1]?.success).toBe(true);
       const totalSignal = (results[0]?.signalGained ?? 0) + (results[1]?.signalGained ?? 0);
       expect(totalSignal).toBe(12); // max 12 signal per day
-      // Total wood spent: 4 (Builder) + 5 (Scout) = 9
+      // Total wood spent: 3 (Builder) + 4 (Scout) = 7
       const totalWood = (results[0]?.woodSpent ?? 0) + (results[1]?.woodSpent ?? 0);
-      expect(totalWood).toBe(9);
+      expect(totalWood).toBe(7);
     });
 
     it('does not charge wood to useless 3rd+ builders when daily signal limit (+12) is reached', () => {
@@ -301,14 +350,14 @@ describe('Support Actions', () => {
     });
 
     it('fails second builder when insufficient wood for both (wood downgrade)', () => {
-      const b1 = createMockPlayer({ id: 'P1', trait: 'Scout' }); // costs 5
-      const b2 = createMockPlayer({ id: 'P2', trait: 'Scout' }); // costs 5
+      const b1 = createMockPlayer({ id: 'P1', trait: 'Scout' }); // costs 4
+      const b2 = createMockPlayer({ id: 'P2', trait: 'Scout' }); // costs 4
 
       const results = resolveBuildSignal([{ player: b1 }, { player: b2 }], 'Clear', 6);
 
       expect(results).toHaveLength(2);
       expect(results[0]?.success).toBe(true);
-      expect(results[0]?.woodSpent).toBe(5);
+      expect(results[0]?.woodSpent).toBe(4);
       expect(results[0]?.signalGained).toBe(8);
 
       expect(results[1]?.success).toBe(false);

@@ -17,29 +17,62 @@ describe('Event System', () => {
     expect(['positive', 'neutral', 'negative']).toContain(result.category);
   });
 
-  it('maintains consistent category distribution independent of crisis state (telemetry only)', () => {
-    const normalState = createGame(100);
-    const crisisState: GameState = {
-      ...normalState,
-      crisis: { foodCrisis: true, waterCrisis: true, hpCrisis: true },
+  it('pity: food < 20 shifts event distribution toward positive', () => {
+    const baseState = createGame(100);
+    const lowFoodState: GameState = {
+      ...baseState,
+      resources: { ...baseState.resources, food: 5, water: 30 },
+    };
+    const normalFoodState: GameState = {
+      ...baseState,
+      resources: { ...baseState.resources, food: 25, water: 30 },
     };
 
+    let lowFoodPositives = 0;
     let normalPositives = 0;
-    let crisisPositives = 0;
     const trials = 500;
 
     for (let i = 0; i < trials; i++) {
       const stream1 = new RNGStream(i + 1);
-      const res1 = resolveDailyEvent(normalState, stream1);
-      if (res1.category === 'positive') normalPositives++;
+      const res1 = resolveDailyEvent(lowFoodState, stream1);
+      if (res1.category === 'positive') lowFoodPositives++;
 
       const stream2 = new RNGStream(i + 1);
-      const res2 = resolveDailyEvent(crisisState, stream2);
-      if (res2.category === 'positive') crisisPositives++;
+      const res2 = resolveDailyEvent(normalFoodState, stream2);
+      if (res2.category === 'positive') normalPositives++;
     }
 
-    // Both should produce identical results because crisis does not independently alter event probabilities
-    expect(crisisPositives).toBe(normalPositives);
+    expect(lowFoodPositives).toBeGreaterThan(normalPositives);
+  });
+
+  it('pity: crisis flags alone do NOT alter event probabilities (only raw levels matter)', () => {
+    const baseState = createGame(100);
+    const noCrisisState: GameState = {
+      ...baseState,
+      resources: { ...baseState.resources, food: 30, water: 30 },
+      crisis: { foodCrisis: false, waterCrisis: false, hpCrisis: false },
+    };
+    const crisisFlagState: GameState = {
+      ...baseState,
+      resources: { ...baseState.resources, food: 30, water: 30 },
+      crisis: { foodCrisis: true, waterCrisis: true, hpCrisis: true },
+    };
+
+    let noCrisisPositives = 0;
+    let crisisFlagPositives = 0;
+    const trials = 500;
+
+    for (let i = 0; i < trials; i++) {
+      const stream1 = new RNGStream(i + 1);
+      const res1 = resolveDailyEvent(noCrisisState, stream1);
+      if (res1.category === 'positive') noCrisisPositives++;
+
+      const stream2 = new RNGStream(i + 1);
+      const res2 = resolveDailyEvent(crisisFlagState, stream2);
+      if (res2.category === 'positive') crisisFlagPositives++;
+    }
+
+    expect(crisisFlagPositives).toBe(noCrisisPositives);
   });
 
   it('correctly applies event resource deltas and caps medicine at maxMedicine (3)', () => {

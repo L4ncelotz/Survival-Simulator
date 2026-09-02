@@ -111,16 +111,13 @@ export function resolveGatherWood(
     config.actions.gatherWood.minWood,
     config.actions.gatherWood.maxWood,
   );
-  const traitBonus = player.trait === 'Builder' ? config.actions.gatherWood.builderBonusWood : 0;
   const rainPenalty = weather === 'Rain' ? config.actions.gatherWood.rainWoodPenalty : 0;
-  const woodGained = Math.max(1, baseWood + traitBonus - rainPenalty);
+  const woodGained = Math.max(1, baseWood - rainPenalty);
 
-  const notes: string[] = [];
-  if (traitBonus > 0) notes.push(`+${traitBonus} Builder bonus`);
-  if (rainPenalty > 0) notes.push(`-${rainPenalty} Rain penalty`);
-  const notesStr = notes.length > 0 ? ` (${notes.join(', ')})` : '';
-
-  const message = `${player.name} (${player.trait}) gathered ${woodGained} wood${notesStr}.`;
+  const message =
+    rainPenalty > 0
+      ? `${player.name} (${player.trait}) gathered ${woodGained} wood (-${rainPenalty} Rain penalty).`
+      : `${player.name} (${player.trait}) gathered ${woodGained} wood.`;
 
   return {
     playerId: player.id,
@@ -159,10 +156,12 @@ export function resolveExplore(
   const medicineChance = config.actions.explore.medicineChance * scoutMedMultiplier;
   const medicineGained = exploreStream.chance(medicineChance) ? 1 : 0;
 
-  // Resource loot rolls
-  const foodGained = exploreStream.nextInt(1, 2);
-  const waterGained = exploreStream.nextInt(1, 2);
-  const woodGained = exploreStream.nextInt(0, 1);
+  // Resource loot rolls (Scout gets ×1.2 rare-find chance)
+  const scoutRareFactor = player.trait === 'Scout' ? config.actions.explore.scoutMedicineMultiplier : 1.0;
+  const rareFindChance = config.actions.explore.rareFindChance * scoutRareFactor;
+  const foodGained = exploreStream.chance(rareFindChance) ? 2 : exploreStream.nextInt(1, 2);
+  const waterGained = exploreStream.chance(rareFindChance) ? 2 : exploreStream.nextInt(1, 2);
+  const woodGained = exploreStream.chance(rareFindChance) ? 1 : exploreStream.nextInt(0, 1);
 
   // Hazard roll (Scout 0.5x, Storm 2.0x, Medic team passive 0.85x)
   const scoutInjuryFactor =
